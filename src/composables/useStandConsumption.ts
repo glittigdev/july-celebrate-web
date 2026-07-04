@@ -2,7 +2,7 @@ import { ref, computed, nextTick, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { standApi, type Stand, type Product } from '@/services/api'
 import { useCashierForm } from '@/composables/useCashierForm'
-import { BrowserQRCodeReader } from '@zxing/browser'
+import { BrowserQRCodeReader, type IScannerControls } from '@zxing/browser'
 
 export type ScanState = 'idle' | 'scanning'
 
@@ -14,13 +14,15 @@ export function useStandConsumption() {
   const loadError = ref('')
   const loadingPage = ref(true)
 
-  const senha = ref('')
   const productId = ref('')
   const quantidade = ref(1)
 
   const scanState = ref<ScanState>('idle')
   const videoRef = ref<HTMLVideoElement | null>(null)
   let codeReader: InstanceType<typeof BrowserQRCodeReader> | null = null
+  let scannerControls: IScannerControls | null = null
+  let hasScanned = false
+  let stopRequested = false
 
   const { loading, alertMessage, alertType, showAlert, clearAlert } = useCashierForm()
 
@@ -37,7 +39,7 @@ export function useStandConsumption() {
   const formattedTotal = computed(() => total.value.toFixed(2).replace('.', ','))
 
   const isFormValid = computed(
-    () => senha.value.trim().length > 0 && productId.value !== '' && quantidade.value >= 1,
+    () => productId.value !== '' && quantidade.value >= 1,
   )
 
   async function loadStand() {
@@ -63,7 +65,11 @@ export function useStandConsumption() {
   }
 
   async function startScanner() {
+    if (scanState.value === 'scanning') return
+
     scanState.value = 'scanning'
+    hasScanned = false
+    stopRequested = false
     await nextTick()
 
     codeReader = new BrowserQRCodeReader()
@@ -78,43 +84,56 @@ export function useStandConsumption() {
         devices.find((d) => /back|rear|environment/i.test(d.label))?.deviceId ??
         devices[0].deviceId
 
-      await codeReader.decodeFromVideoDevice(deviceId, videoRef.value!, (result) => {
-        if (result) {
-          const cardCode = result.getText()
-          stopScanner()
-          submitSale(cardCode)
-        }
+      const controls = await codeReader.decodeFromVideoDevice(deviceId, videoRef.value!, (result) => {
+        if (!result || hasScanned) return
+        hasScanned = true
+        const rawQrCode = result.getText()
+        stopScanner()
+        submitSale(rawQrCode)
       })
+
+      // stopScanner() may already have run (user closed the dialog) while the
+      // camera stream was still being set up — honor that instead of leaving
+      // the stream running in the background.
+      if (stopRequested) {
+        controls.stop()
+        return
+      }
+      scannerControls = controls
     } catch {
-      showAlert('Erro ao acessar a câmera. Verifique as permissões.', 'error')
+      if (!stopRequested) {
+        showAlert('Erro ao acessar a câmera. Verifique as permissões.', 'error')
+      }
       scanState.value = 'idle'
     }
   }
 
   function stopScanner() {
-    if (codeReader) {
-      codeReader.reset()
-      codeReader = null
-    }
+    stopRequested = true
+    scannerControls?.stop()
+    scannerControls = null
+    codeReader = null
     scanState.value = 'idle'
   }
 
   async function submitSale(rawQrCode: string) {
-    // O QR code pode conter a URL completa: "https://...?id=<cardId>"
-    // Extraímos o cardId do parâmetro "id" se for uma URL
-    let codigoCartao = rawQrCode
+    let codigoCartao = ''
     try {
       const url = new URL(rawQrCode)
-      codigoCartao = url.searchParams.get('id') || rawQrCode
+      codigoCartao = url.searchParams.get('id') ?? ''
     } catch {
-      // Não é uma URL — usa o valor bruto como cardId
+      codigoCartao = rawQrCode.trim()
+    }
+
+    if (!codigoCartao) {
+      showAlert('QR Code inválido. Tente novamente.', 'error')
+      return
     }
 
     loading.value = true
     clearAlert()
     try {
       const response = await standApi.registerConsumo({
-        senha: senha.value.trim(),
         produtoId: productId.value,
         quantidade: quantidade.value,
         valorTotal: total.value,
@@ -127,7 +146,6 @@ export function useStandConsumption() {
 
       if (status === 201) {
         showAlert(msg || 'Consumo registrado com sucesso!', 'success')
-        senha.value = ''
         productId.value = ''
         quantidade.value = 1
       } else {
@@ -144,9 +162,6 @@ export function useStandConsumption() {
 
   function resolveErrorMessage(raw: string): string {
     const lower = raw.toLowerCase()
-    if (lower.includes('senha') || lower.includes('password') || lower.includes('code')) {
-      return 'Senha de liberação inválida.'
-    }
     if (lower.includes('cartao') || lower.includes('cartão') || lower.includes('card') || lower.includes('not found')) {
       return 'Cartão não encontrado. Verifique o QR code.'
     }
@@ -179,7 +194,6 @@ export function useStandConsumption() {
     products,
     loadError,
     loadingPage,
-    senha,
     productId,
     quantidade,
     scanState,

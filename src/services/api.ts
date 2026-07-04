@@ -1,6 +1,7 @@
 import axios from 'axios'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || 'http://localhost:8080'
+const BASE_URL =
+  import.meta.env.VITE_API_BASE_URL?.trim() || 'https://june-celebrate-api.onrender.com'
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -80,13 +81,39 @@ export const standApi = {
   getProducts: (standId: string) => api.get<{ products: Product[] }>(`/product/info?id=${standId}`),
 
   registerConsumo: (payload: {
-    senha: string
     produtoId: string
     quantidade: number
     valorTotal: number
     codigoCartao: string
     barracaId: string
   }) => api.post<ApiEnvelope<{ message: string; saldoRestante: number }>>('/consumo', payload),
+}
+
+// ── Cartão ────────────────────────────────────────────────────────────────────
+
+export interface CardData {
+  _id: string
+  card: string
+  status: string
+  value_available: number
+  total_value: number
+  return_value?: number
+}
+
+export interface TransactionItem {
+  _id: string
+  createdAt: string
+  type: string
+  qtd: number
+  product_value: number
+  value_total_operation: number
+  product: { _id: string; name: string }
+  stand: { _id: string; name: string }
+}
+
+export const cardApi = {
+  getCardInfo: (id: string) =>
+    api.get<ApiEnvelope<{ card: CardData; transactions: TransactionItem[] }>>(`/card/info/${id}`),
 }
 
 export default api

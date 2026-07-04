@@ -67,19 +67,6 @@
           <!-- Formulário -->
           <v-form v-else @submit.prevent="onSubmit">
             <div class="field-group">
-              <v-text-field
-                v-model="senha"
-                label="Senha de liberação"
-                prepend-inner-icon="mdi-lock-outline"
-                type="tel"
-                variant="outlined"
-                rounded="lg"
-                color="primary"
-                autocomplete="off"
-              />
-            </div>
-
-            <div class="field-group">
               <v-select
                 v-model="productId"
                 :items="products"
@@ -187,7 +174,6 @@ const {
   products,
   loadError,
   loadingPage,
-  senha,
   productId,
   quantidade,
   scanState,

@@ -4,6 +4,7 @@ import CashierView from '../views/CashierView.vue'
 import StandView from '../views/StandView.vue'
 import ReportView from '../views/ReportView.vue'
 import SaldoView from '../views/SaldoView.vue'
+import CardView from '../views/CardView.vue'
 
 const routes: RouteRecordRaw[] = [
   { path: '/caixa', component: CashierView },
@@ -14,6 +15,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/barraca/:id', component: StandView },
   { path: '/relatorio', component: ReportView },
   { path: '/saldo', component: SaldoView },
+  { path: '/card', component: CardView },
   { path: '/', redirect: '/caixa' },
 ]
 
