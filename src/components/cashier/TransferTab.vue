@@ -96,51 +96,6 @@
         </v-expand-transition>
       </div>
 
-      <!-- ── Valor da Transferência ──────────────────────────────────── -->
-      <div class="field-group mb-2">
-        <v-switch
-          v-model="transferAll"
-          label="Transferir saldo total"
-          color="primary"
-          hide-details
-          class="mb-3"
-          @update:model-value="onTransferAllChange"
-        />
-
-        <v-text-field
-          v-model.number="transferValue"
-          label="Valor a Transferir (R$)"
-          prepend-inner-icon="mdi-currency-brl"
-          :error-messages="transferValueMeta.touched ? transferValueError : ''"
-          type="number"
-          min="0.01"
-          step="0.01"
-          variant="outlined"
-          rounded="lg"
-          color="primary"
-          :disabled="transferAll"
-          required
-        />
-      </div>
-
-      <!-- Prévia pós-transferência -->
-      <v-expand-transition>
-        <div v-if="showPreview" class="transfer-preview mb-5">
-          <div class="preview-title">
-            <v-icon size="16" class="mr-1">mdi-eye</v-icon>
-            Prévia após transferência
-          </div>
-          <div class="preview-row">
-            <span>Cartão Origem ficará com:</span>
-            <strong class="text-error">R$ {{ previewOriginBalance }}</strong>
-          </div>
-          <div class="preview-row">
-            <span>Cartão Destino ficará com:</span>
-            <strong class="text-success">R$ {{ previewDestinationBalance }}</strong>
-          </div>
-        </div>
-      </v-expand-transition>
-
       <!-- Botão -->
       <v-btn
         type="submit"
@@ -172,7 +127,6 @@ const originCardInfo = ref<CardInfo | null>(null)
 const destinationCardInfo = ref<CardInfo | null>(null)
 const fetchingOrigin = ref(false)
 const fetchingDestination = ref(false)
-const transferAll = ref(false)
 
 // ── Schema de validação ───────────────────────────────────────────────────────
 const schema = yup.object({
@@ -187,20 +141,11 @@ const schema = yup.object({
         return value !== this.parent.originCard
       },
     ),
-  transferValue: yup
-    .number()
-    .typeError('Informe um valor válido')
-    .moreThan(0, 'Valor deve ser maior que zero')
-    .required('Valor é obrigatório')
-    .test('max-balance', 'Valor maior que o saldo disponível', function (value) {
-      if (!originCardInfo.value) return true // validado pelo API
-      return (value ?? 0) <= originCardInfo.value.value_available
-    }),
 })
 
-const { handleSubmit, resetForm, setFieldValue } = useForm({
+const { handleSubmit, resetForm } = useForm({
   validationSchema: schema,
-  initialValues: { originCard: '', destinationCard: '', transferValue: 0 },
+  initialValues: { originCard: '', destinationCard: '' },
 })
 
 const {
@@ -213,35 +158,10 @@ const {
   errorMessage: destinationCardError,
   meta: destinationCardMeta,
 } = useField<string>('destinationCard')
-const {
-  value: transferValue,
-  errorMessage: transferValueError,
-  meta: transferValueMeta,
-} = useField<number>('transferValue')
 
 // ── Computed ──────────────────────────────────────────────────────────────────
 const hasFormErrors = computed(() => {
-  return !!(originCardError.value || destinationCardError.value || transferValueError.value)
-})
-
-const showPreview = computed(() => {
-  return (
-    originCardInfo.value !== null &&
-    destinationCardInfo.value !== null &&
-    (transferValue.value ?? 0) > 0
-  )
-})
-
-const previewOriginBalance = computed(() => {
-  if (!originCardInfo.value) return '—'
-  const remaining = originCardInfo.value.value_available - (transferValue.value ?? 0)
-  return remaining.toFixed(2).replace('.', ',')
-})
-
-const previewDestinationBalance = computed(() => {
-  if (!destinationCardInfo.value) return '—'
-  const newBalance = destinationCardInfo.value.value_available + (transferValue.value ?? 0)
-  return newBalance.toFixed(2).replace('.', ',')
+  return !!(originCardError.value || destinationCardError.value)
 })
 
 // ── Busca de saldo ────────────────────────────────────────────────────────────
@@ -279,23 +199,9 @@ async function fetchDestinationBalance() {
   }
 }
 
-// ── "Transferir tudo" ─────────────────────────────────────────────────────────
-function onTransferAllChange(val: boolean) {
-  if (val && originCardInfo.value) {
-    setFieldValue('transferValue', originCardInfo.value.value_available)
-  }
-}
-
-watch(originCardInfo, (info) => {
-  if (transferAll.value && info) {
-    setFieldValue('transferValue', info.value_available)
-  }
-})
-
 // ── Limpar dados ao trocar cartão ─────────────────────────────────────────────
 watch(originCard, () => {
   originCardInfo.value = null
-  transferAll.value = false
 })
 watch(destinationCard, () => {
   destinationCardInfo.value = null
@@ -308,7 +214,6 @@ const submitTransfer = handleSubmit(async (formData) => {
     const response = await cashierApi.transfer({
       originCard: formData.originCard,
       destinationCard: formData.destinationCard,
-      value: formData.transferValue,
     })
 
     const status = response.data.status
@@ -319,7 +224,6 @@ const submitTransfer = handleSubmit(async (formData) => {
       resetForm()
       originCardInfo.value = null
       destinationCardInfo.value = null
-      transferAll.value = false
     } else {
       showAlert(msg || 'Não foi possível realizar a transferência.', 'error')
     }
@@ -388,36 +292,5 @@ const submitTransfer = handleSubmit(async (formData) => {
 
 .loading-balance {
   color: rgba(var(--v-theme-on-surface), 0.5);
-}
-
-.transfer-preview {
-  border-radius: 12px;
-  padding: 14px 16px;
-  background: rgba(var(--v-theme-surface-variant), 0.4);
-  border: 1px dashed rgba(var(--v-theme-on-surface), 0.2);
-}
-
-.preview-title {
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: rgba(var(--v-theme-on-surface), 0.5);
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.preview-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.88rem;
-  padding: 4px 0;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
-}
-
-.preview-row:last-child {
-  border-bottom: none;
 }
 </style>
