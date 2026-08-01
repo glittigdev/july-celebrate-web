@@ -6,6 +6,23 @@ import { BrowserQRCodeReader, type IScannerControls } from '@zxing/browser'
 
 export type ScanState = 'idle' | 'scanning'
 
+class RearCameraUnavailableError extends Error {
+  constructor() {
+    super('Rear camera unavailable')
+    this.name = 'RearCameraUnavailableError'
+  }
+}
+
+const exactRearCameraConstraints: MediaStreamConstraints = {
+  audio: false,
+  video: { facingMode: { exact: 'environment' } },
+}
+
+const idealRearCameraConstraints: MediaStreamConstraints = {
+  audio: false,
+  video: { facingMode: { ideal: 'environment' } },
+}
+
 export function useStandConsumption() {
   const route = useRoute()
 
@@ -23,6 +40,7 @@ export function useStandConsumption() {
   let scannerControls: IScannerControls | null = null
   let hasScanned = false
   let stopRequested = false
+  let scannerSessionId = 0
 
   const { loading, alertMessage, alertType, showAlert, clearAlert } = useCashierForm()
 
@@ -67,51 +85,137 @@ export function useStandConsumption() {
   async function startScanner() {
     if (scanState.value === 'scanning') return
 
+    stopScanner()
+    const sessionId = ++scannerSessionId
     scanState.value = 'scanning'
     hasScanned = false
     stopRequested = false
     await nextTick()
 
     codeReader = new BrowserQRCodeReader()
-    try {
-      const devices = await BrowserQRCodeReader.listVideoInputDevices()
-      if (!devices.length) {
-        showAlert('Nenhuma câmera encontrada.', 'error')
-        scanState.value = 'idle'
-        return
-      }
-      const deviceId =
-        devices.find((d) => /back|rear|environment/i.test(d.label))?.deviceId ??
-        devices[0].deviceId
+    const currentCodeReader = codeReader
+    let cameraValidated = false
+    const isCancelled = () => stopRequested || sessionId !== scannerSessionId
+    const onDecode = (
+      result: Parameters<Parameters<typeof currentCodeReader.decodeFromConstraints>[2]>[0],
+    ) => {
+      if (!cameraValidated || !result || hasScanned || isCancelled()) return
+      hasScanned = true
+      const rawQrCode = result.getText()
+      stopScanner()
+      submitSale(rawQrCode)
+    }
 
-      const controls = await codeReader.decodeFromVideoDevice(deviceId, videoRef.value!, (result) => {
-        if (!result || hasScanned) return
-        hasScanned = true
-        const rawQrCode = result.getText()
-        stopScanner()
-        submitSale(rawQrCode)
-      })
+    try {
+      let controls: IScannerControls | null
+
+      try {
+        controls = await openRearCamera(
+          currentCodeReader,
+          exactRearCameraConstraints,
+          onDecode,
+          isCancelled,
+        )
+      } catch (error) {
+        if (isCancelled() || !supportsIdealFallback(error)) throw error
+        stopActiveVideoStream()
+        controls = await openRearCamera(
+          currentCodeReader,
+          idealRearCameraConstraints,
+          onDecode,
+          isCancelled,
+        )
+      }
 
       // stopScanner() may already have run (user closed the dialog) while the
       // camera stream was still being set up — honor that instead of leaving
       // the stream running in the background.
-      if (stopRequested) {
-        controls.stop()
-        return
-      }
+      if (!controls || isCancelled()) return
       scannerControls = controls
-    } catch {
-      if (!stopRequested) {
-        showAlert('Erro ao acessar a câmera. Verifique as permissões.', 'error')
+      cameraValidated = true
+    } catch (error) {
+      if (!isCancelled()) {
+        stopScanner()
+        showAlert(resolveCameraErrorMessage(error), 'error')
       }
-      scanState.value = 'idle'
     }
+  }
+
+  async function openRearCamera(
+    reader: InstanceType<typeof BrowserQRCodeReader>,
+    constraints: MediaStreamConstraints,
+    onDecode: Parameters<typeof reader.decodeFromConstraints>[2],
+    isCancelled: () => boolean,
+  ): Promise<IScannerControls | null> {
+    const controls = await reader.decodeFromConstraints(constraints, videoRef.value!, onDecode)
+
+    if (isCancelled()) {
+      controls.stop()
+      return null
+    }
+
+    const stream = getActiveVideoStream()
+    const track = stream?.getVideoTracks()[0]
+    if (!track) {
+      controls.stop()
+      stopActiveVideoStream()
+      throw new RearCameraUnavailableError()
+    }
+
+    const facingMode = track.getSettings?.().facingMode
+    if (facingMode && facingMode !== 'environment') {
+      controls.stop()
+      stopActiveVideoStream()
+      throw new RearCameraUnavailableError()
+    }
+
+    return controls
+  }
+
+  function getActiveVideoStream(): MediaStream | null {
+    const source = videoRef.value?.srcObject
+    return source && 'getTracks' in source ? (source as MediaStream) : null
+  }
+
+  function stopActiveVideoStream() {
+    const stream = getActiveVideoStream()
+    stream?.getTracks().forEach((track) => track.stop())
+    if (videoRef.value) videoRef.value.srcObject = null
+  }
+
+  function supportsIdealFallback(error: unknown): boolean {
+    if (error instanceof RearCameraUnavailableError) return true
+
+    const errorName = (error as { name?: string } | null)?.name
+    return [
+      'OverconstrainedError',
+      'ConstraintNotSatisfiedError',
+      'NotFoundError',
+      'DevicesNotFoundError',
+      'NotSupportedError',
+      'TypeError',
+    ].includes(errorName ?? '')
+  }
+
+  function resolveCameraErrorMessage(error: unknown): string {
+    if (error instanceof RearCameraUnavailableError) {
+      return 'Não foi possível acessar uma câmera traseira.'
+    }
+
+    const errorName = (error as { name?: string } | null)?.name
+    if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError') {
+      return 'Nenhuma câmera encontrada.'
+    }
+
+    return 'Erro ao acessar a câmera. Verifique as permissões.'
   }
 
   function stopScanner() {
     stopRequested = true
+    scannerSessionId++
     scannerControls?.stop()
     scannerControls = null
+    stopActiveVideoStream()
     codeReader = null
     scanState.value = 'idle'
   }
